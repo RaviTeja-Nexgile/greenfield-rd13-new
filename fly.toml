@@ -1,0 +1,35 @@
+# Fly.io configuration for Leave Tracker.
+# Build: the Dockerfile in this folder (node:22-alpine, CMD node src/server.js).
+# Run: the server listens on $PORT (src/server.js), which Fly sets to the internal_port below.
+# Secrets: none are written here. Set them with `fly secrets set NAME=value` (or in the
+# GitHub workflow from repository secrets); the app reads them from environment variables.
+
+app = "leave-tracker-new"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  NODE_ENV = "production"
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ["app"]
+
+  # GET /api/health answers 200 with {"ok":true} (src/server.js), so Fly can use it
+  # to decide whether a machine is healthy and whether a deploy succeeded.
+  [[http_service.checks]]
+    grace_period = "5s"
+    interval = "15s"
+    method = "GET"
+    timeout = "2s"
+    path = "/api/health"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"
