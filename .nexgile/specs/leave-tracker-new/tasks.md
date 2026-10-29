@@ -16,7 +16,7 @@
   - _Mode: devops_
   - _Issue: #2_
 
-- [ ] 3. Deployment setup for Fly.io
+- [x] 3. Deployment setup for Fly.io
   - Write what Fly.io needs to build and run the app there, and do not deploy it: for example its configuration file, a Dockerfile, or the workflow of a pipeline that deploys it.
   - Read every secret from an environment variable. Never write a secret in a file.
   - Greenfield then checks the Docker files this task writes, with no secret or deploy value set: each compose file with `docker compose -f <file> config --quiet --no-interpolate`, and a `Dockerfile` in the app's root folder with `docker build -t leave-tracker-new:verify .`, with `--target <stage>` for each stage a compose file it writes builds from it. Write them so these checks pass.
