@@ -1,0 +1,25 @@
+# Leave Tracker on your own server.
+# Run from the repository root on the server:
+#   docker compose -f docker-compose.prod.yml up -d --build
+# The app reads its port from PORT (default 3000) and serves GET /api/health.
+# No secret is written here: any value the app needs comes from the server's
+# environment or a git-ignored .env file next to this one.
+services:
+    app:
+        build:
+            context: .
+            dockerfile: Dockerfile
+            target: production
+        image: leave-tracker-rd2:latest
+        ports:
+            - "${APP_PORT:-3000}:3000"
+        environment:
+            NODE_ENV: production
+            PORT: "3000"
+        restart: unless-stopped
+        healthcheck:
+            test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+            interval: 30s
+            timeout: 3s
+            retries: 3
+            start_period: 5s
