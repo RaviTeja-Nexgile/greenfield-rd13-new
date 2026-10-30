@@ -1,9 +1,0 @@
-services:
-  app:
-    image: leave-tracker-new:${APP_TAG}
-    build: .
-    environment:
-      PORT: "3000"
-    ports:
-      - "80:3000"
-    restart: unless-stopped

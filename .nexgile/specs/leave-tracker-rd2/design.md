@@ -10,4 +10,4 @@ Install: npm ci
 Test: npm test
 Run locally: no
 Health path: /api/health
-Deploy: Fly.io
+Deploy: ssh-docker
