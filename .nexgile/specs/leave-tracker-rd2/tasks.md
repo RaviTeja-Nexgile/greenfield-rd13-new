@@ -25,3 +25,4 @@
   - _Verify: npm test_
   - _Mode: devops_
   - _Docker checks: the files this task writes_
+  - _Issue: #5_
