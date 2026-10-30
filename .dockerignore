@@ -1,0 +1,15 @@
+# Keep local state, secrets and test files out of the build context.
+.git
+.github
+.gitignore
+node_modules
+.env
+.env.*
+.nexgile
+.nexgilecodekg
+test
+coverage
+*.md
+Dockerfile
+.dockerignore
+docker-compose*.yml

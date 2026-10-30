@@ -1,0 +1,147 @@
+# Leave Tracker — CI and deploy to the app's own server over SSH + Docker.
+# Nothing here deploys by itself: the production job runs only when a person starts
+# this workflow by hand with deploy_production checked, and then waits for the
+# required reviewers of the "production" environment (see DEPLOY.md).
+#
+# Version pins: the action tags below are release tags written from memory and are
+# NOT verified — no tag lookup was run for them. Pin each to a full commit SHA
+# (and the base image to a digest) before relying on this workflow.
+# See DEPLOY.md, "Versions to pin".
+name: CI and deploy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      deploy_production:
+        description: "Build, push and deploy to the production server (still waits for a required reviewer)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4 # unchecked (from memory)
+      - uses: actions/setup-node@v4 # unchecked (from memory)
+        with:
+          node-version-file: package.json
+          cache: npm
+      - run: npm ci
+      - run: npm test
+
+  security-scan:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4 # unchecked (from memory)
+      # Third-party action: pin the full commit SHA of a release you checked.
+      - uses: aquasecurity/trivy-action@0.28.0 # unchecked (from memory)
+        with:
+          scan-type: fs
+          severity: CRITICAL,HIGH
+          exit-code: "1"
+
+  build-image:
+    needs: [test, security-scan]
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy_production
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4 # unchecked (from memory)
+      - uses: docker/setup-buildx-action@v3 # unchecked (from memory)
+      - uses: docker/login-action@v3 # unchecked (from memory)
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6 # unchecked (from memory)
+        with:
+          context: .
+          target: production
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy-production:
+    # Never automatic: a person starts the workflow with deploy_production checked,
+    # AND a required reviewer approves the "production" environment.
+    needs: build-image
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy_production
+    runs-on: ubuntu-24.04
+    environment: production
+    concurrency:
+      group: production
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4 # unchecked (from memory)
+      # The server pulls the image this run pushed and restarts the service.
+      # Credentials come from environment secrets, never from a file in the repo.
+      - name: Deploy over SSH
+        env:
+          SSH_HOST: ${{ secrets.DEPLOY_SSH_HOST }}
+          SSH_USER: ${{ secrets.DEPLOY_SSH_USER }}
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # The repository is checked out here on the server (see DEPLOY.md); the compose
+          # file and the .env file both live in this directory.
+          DEPLOY_DIR: ${{ vars.DEPLOY_DIR || '~/leave-tracker' }}
+          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+        run: |
+          set -eu
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          # Record the tag currently running so the rollback step can return to it.
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes "$SSH_USER@$SSH_HOST" \
+            "cd '$DEPLOY_DIR' && mkdir -p deploy && cat deploy/current-tag > deploy/previous-tag 2>/dev/null || true"
+          # An SSH command starts in the user's home directory, so cd into the deploy
+          # directory first: that is where docker-compose.prod.yml and .env are.
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes "$SSH_USER@$SSH_HOST" \
+            "cd '$DEPLOY_DIR' && echo '$GHCR_TOKEN' | docker login ghcr.io -u '$GHCR_USER' --password-stdin && \
+             IMAGE_TAG='${{ github.sha }}' docker compose -f docker-compose.prod.yml pull app && \
+             IMAGE_TAG='${{ github.sha }}' docker compose -f docker-compose.prod.yml up -d --no-build app && \
+             echo '${{ github.sha }}' > deploy/current-tag"
+      # Rollback: if the health check fails, redeploy the previous tag recorded on the
+      # server (deploy/previous-tag) and fail the run so a person sees it.
+      - name: Verify health, roll back on failure
+        env:
+          SSH_HOST: ${{ secrets.DEPLOY_SSH_HOST }}
+          SSH_USER: ${{ secrets.DEPLOY_SSH_USER }}
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}
+          APP_PORT: ${{ vars.APP_PORT }}
+          DEPLOY_DIR: ${{ vars.DEPLOY_DIR || '~/leave-tracker' }}
+        run: |
+          set -eu
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          PORT="${APP_PORT:-3000}"
+          if ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes "$SSH_USER@$SSH_HOST" \
+               "for i in 1 2 3 4 5 6 7 8 9 10; do wget -q -O /dev/null http://127.0.0.1:$PORT/api/health && exit 0; sleep 3; done; exit 1"; then
+            echo "Health check passed."
+          else
+            echo "Health check failed — rolling back to the previous image tag."
+            # Same deploy directory as the deploy step: the compose file and .env live there.
+            ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes "$SSH_USER@$SSH_HOST" \
+              "cd '$DEPLOY_DIR' && PREV=\$(cat deploy/previous-tag 2>/dev/null || true); \
+               if [ -n \"\$PREV\" ]; then IMAGE_TAG=\"\$PREV\" docker compose -f docker-compose.prod.yml up -d --no-build app; fi"
+            exit 1
+          fi
