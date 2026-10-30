@@ -1,0 +1,30 @@
+# Leave Tracker — production compose file for the app's own server.
+# Run from the repository root:  docker compose -f docker-compose.prod.yml up -d --build
+# Every value below comes from the server's environment or a git-ignored .env file
+# (see .env.example for the names). No secret is written in this file.
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    image: leave-tracker-rd2:${IMAGE_TAG:-local}
+    ports:
+      # Host port only; the container always listens on 3000 (the app's default).
+      - "${APP_PORT:-3000}:3000"
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+    restart: unless-stopped
+    healthcheck:
+      # GET /api/health is the route src/server.js serves.
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:3000/api/health"]
+      interval: 30s
+      timeout: 3s
+      start_period: 5s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
